@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Screen Share</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root { --bg: #0f0f0f; --card: #1a1a2e; --accent: #e94560; --blue: #0f3460; --text: #eee; --muted: #888; }
+body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+.header { background: var(--card); padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--accent); }
+.header h1 { font-size: 1.4rem; font-weight: 700; }
+.header h1 span { color: var(--accent); }
+.status { font-size: 0.8rem; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.status .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+.status .dot.live { background: #2ecc71; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+/* Landing */
+.landing { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 70vh; gap: 30px; text-align: center; }
+.landing h2 { font-size: 2rem; font-weight: 300; }
+.landing p { color: var(--muted); max-width: 500px; line-height: 1.6; }
+.btn-group { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+.btn { padding: 14px 36px; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.btn-host { background: var(--accent); color: #fff; }
+.btn-host:hover { background: #c73850; transform: translateY(-2px); }
+.btn-join { background: var(--blue); color: #fff; }
+.btn-join:hover { background: #1a4a80; transform: translateY(-2px); }
+
+/* Room */
+.room { display: none; }
+.room.active { display: block; }
+.video-area { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 16/9; max-height: 70vh; margin-bottom: 16px; }
+.video-area video { width: 100%; height: 100%; object-fit: contain; }
+.video-area .no-stream { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: var(--muted); font-size: 1.1rem; }
+
+.controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 0; }
+.controls .btn { padding: 10px 20px; font-size: 0.85rem; border-radius: 6px; }
+.btn-danger { background: #c0392b; color: #fff; }
+.btn-danger:hover { background: #a93226; }
+.btn-secondary { background: #333; color: #fff; }
+.btn-secondary:hover { background: #444; }
+
+.room-info { background: var(--card); border-radius: 8px; padding: 16px 20px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.room-code { font-size: 1.5rem; font-weight: 700; color: var(--accent); letter-spacing: 2px; }
+.viewer-count { font-size: 0.85rem; color: var(--muted); }
+.viewer-count span { color: #2ecc71; font-weight: 700; font-size: 1.1rem; }
+
+.copy-link { background: var(--blue); color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.82rem; }
+.copy-link:hover { background: #1a4a80; }
+
+/* Join modal */
+.modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 100; align-items: center; justify-content: center; }
+.modal.active { display: flex; }
+.modal-box { background: var(--card); padding: 32px; border-radius: 12px; text-align: center; min-width: 340px; }
+.modal-box h3 { margin-bottom: 16px; font-size: 1.2rem; }
+.modal-box input { width: 100%; padding: 12px; border: 2px solid #333; border-radius: 8px; background: #111; color: #fff; font-size: 1.2rem; text-align: center; letter-spacing: 4px; margin-bottom: 16px; outline: none; }
+.modal-box input:focus { border-color: var(--accent); }
+
+/* Chat */
+.chat-area { background: var(--card); border-radius: 8px; padding: 16px; max-height: 200px; overflow-y: auto; margin-top: 12px; }
+.chat-area .msg { padding: 4px 0; font-size: 0.82rem; border-bottom: 1px solid #222; }
+.chat-area .msg .time { color: var(--muted); margin-right: 8px; font-size: 0.72rem; }
+.chat-area .msg .name { color: var(--accent); font-weight: 600; margin-right: 6px; }
+
+@media (max-width: 768px) {
+  .landing h2 { font-size: 1.4rem; }
+  .btn { padding: 12px 24px; font-size: 0.9rem; }
+  .room-code { font-size: 1.2rem; }
+  .container { padding: 12px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Live<span>Share</span></h1>
+  <div class="status">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">대기 중</span>
+  </div>
+</div>
+
+<div class="container">
+  <!-- Landing -->
+  <div class="landing" id="landing">
+    <h2>실시간 화면 공유</h2>
+    <p>화면과 마이크를 최대 100명에게 실시간으로 공유하세요. 설치 없이 브라우저만으로 작동합니다.</p>
+    <div class="btn-group">
+      <button class="btn btn-host" onclick="startHost()">방송 시작</button>
+      <button class="btn btn-join" onclick="showJoinModal()">시청 참가</button>
+    </div>
+  </div>
+
+  <!-- Host Room -->
+  <div class="room" id="hostRoom">
+    <div class="room-info">
+      <div>
+        <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">방 코드</div>
+        <div class="room-code" id="roomCode">------</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="viewer-count">시청자 <span id="viewerCount">0</span>명</div>
+        <button class="copy-link" onclick="copyLink()">링크 복사</button>
+      </div>
+    </div>
+    <div class="video-area">
+      <video id="hostVideo" autoplay muted playsinline></video>
+    </div>
+    <div class="controls">
+      <button class="btn btn-secondary" id="micBtn" onclick="toggleMic()">🎤 마이크 ON</button>
+      <button class="btn btn-secondary" id="screenBtn" onclick="changeScreen()">🖥️ 화면 변경</button>
+      <button class="btn btn-danger" onclick="stopHost()">방송 종료</button>
+    </div>
+    <div class="chat-area" id="hostChat"></div>
+  </div>
+
+  <!-- Viewer Room -->
+  <div class="room" id="viewerRoom">
+    <div class="room-info">
+      <div>
+        <div style="font-size:0.75rem;color:var(--muted);margin-bottom:4px;">시청 중</div>
+        <div class="room-code" id="viewRoomCode">------</div>
+      </div>
+      <div class="viewer-count">연결됨</div>
+    </div>
+    <div class="video-area">
+      <video id="viewerVideo" autoplay playsinline></video>
+      <div class="no-stream" id="noStream">방송자 연결 대기 중...</div>
+    </div>
+    <div class="controls">
+      <button class="btn btn-danger" onclick="leaveRoom()">나가기</button>
+    </div>
+  </div>
+</div>
+
+<!-- Join Modal -->
+<div class="modal" id="joinModal">
+  <div class="modal-box">
+    <h3>방 코드 입력</h3>
+    <input type="text" id="joinCode" placeholder="ABCDEF" maxlength="6" autofocus>
+    <div class="btn-group">
+      <button class="btn btn-join" onclick="joinRoom()">참가</button>
+      <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let peer = null;
+let hostStream = null;
+let micStream = null;
+let mixedStream = null;
+let connections = [];
+let roomId = '';
+let micEnabled = true;
+
+function genCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+function setStatus(text, live) {
+  document.getElementById('statusText').textContent = text;
+  document.getElementById('statusDot').className = live ? 'dot live' : 'dot';
+}
+
+function log(area, name, text) {
+  const chat = document.getElementById(area);
+  if (!chat) return;
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  chat.innerHTML += `<div class="msg"><span class="time">${time}</span><span class="name">${name}</span>${text}</div>`;
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function updateViewerCount() {
+  const active = connections.filter(c => c.open).length;
+  document.getElementById('viewerCount').textContent = active;
+}
+
+// ═══ HOST ═══
+async function startHost() {
+  try {
+    // Get screen
+    hostStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+    // Get microphone
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch(e) {
+      console.log('Mic not available');
+    }
+
+    // Mix streams
+    mixStreams();
+
+    // Show video
+    document.getElementById('hostVideo').srcObject = hostStream;
+
+    // Create peer
+    roomId = genCode();
+    peer = new Peer('ls-' + roomId, {
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' }
+        ]
+      }
+    });
+
+    peer.on('open', (id) => {
+      document.getElementById('roomCode').textContent = roomId;
+      document.getElementById('landing').style.display = 'none';
+      document.getElementById('hostRoom').classList.add('active');
+      setStatus('방송 중', true);
+      log('hostChat', '시스템', '방송이 시작되었습니다. 코드: ' + roomId);
+    });
+
+    peer.on('call', (call) => {
+      call.answer(mixedStream || hostStream);
+      connections.push(call);
+      updateViewerCount();
+      log('hostChat', '시스템', '새 시청자 연결됨 (총 ' + connections.filter(c=>c.open).length + '명)');
+
+      call.on('close', () => {
+        connections = connections.filter(c => c !== call);
+        updateViewerCount();
+        log('hostChat', '시스템', '시청자 퇴장 (총 ' + connections.filter(c=>c.open).length + '명)');
+      });
+    });
+
+    peer.on('error', (err) => {
+      console.error(err);
+      if (err.type === 'unavailable-id') {
+        alert('이미 사용 중인 방 코드입니다. 다시 시도해주세요.');
+        location.reload();
+      }
+    });
+
+    // Handle screen share stop
+    hostStream.getVideoTracks()[0].onended = () => {
+      stopHost();
+    };
+
+  } catch(e) {
+    alert('화면 공유를 허용해주세요.');
+    console.error(e);
+  }
+}
+
+function mixStreams() {
+  const ctx = new AudioContext();
+  const dest = ctx.createMediaStreamDestination();
+
+  // Screen audio (if any)
+  if (hostStream.getAudioTracks().length > 0) {
+    const screenAudio = ctx.createMediaStreamSource(new MediaStream(hostStream.getAudioTracks()));
+    screenAudio.connect(dest);
+  }
+
+  // Mic audio
+  if (micStream && micStream.getAudioTracks().length > 0) {
+    const micAudio = ctx.createMediaStreamSource(micStream);
+    micAudio.connect(dest);
+  }
+
+  // Combine video + mixed audio
+  mixedStream = new MediaStream([
+    ...hostStream.getVideoTracks(),
+    ...dest.stream.getAudioTracks()
+  ]);
+}
+
+function toggleMic() {
+  if (!micStream) return;
+  micEnabled = !micEnabled;
+  micStream.getAudioTracks().forEach(t => t.enabled = micEnabled);
+  document.getElementById('micBtn').textContent = micEnabled ? '🎤 마이크 ON' : '🔇 마이크 OFF';
+}
+
+async function changeScreen() {
+  try {
+    const newStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+    // Replace video track
+    const newTrack = newStream.getVideoTracks()[0];
+    hostStream.getVideoTracks().forEach(t => t.stop());
+
+    hostStream = newStream;
+    document.getElementById('hostVideo').srcObject = hostStream;
+    mixStreams();
+
+    // Replace track for all connections
+    connections.forEach(call => {
+      const sender = call.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) sender.replaceTrack(newTrack);
+    });
+
+    newTrack.onended = () => stopHost();
+    log('hostChat', '시스템', '화면이 변경되었습니다.');
+  } catch(e) {
+    console.error(e);
+  }
+}
+
+function stopHost() {
+  if (hostStream) hostStream.getTracks().forEach(t => t.stop());
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  connections.forEach(c => c.close());
+  if (peer) peer.destroy();
+  setStatus('대기 중', false);
+  document.getElementById('hostRoom').classList.remove('active');
+  document.getElementById('landing').style.display = '';
+}
+
+// ═══ VIEWER ═══
+function showJoinModal() {
+  document.getElementById('joinModal').classList.add('active');
+  document.getElementById('joinCode').focus();
+
+  // Check URL params
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('room')) {
+    document.getElementById('joinCode').value = params.get('room');
+  }
+}
+
+function closeModal() {
+  document.getElementById('joinModal').classList.remove('active');
+}
+
+document.getElementById('joinCode').addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') joinRoom();
+});
+
+function joinRoom() {
+  const code = document.getElementById('joinCode').value.trim().toUpperCase();
+  if (!code || code.length < 4) { alert('방 코드를 입력해주세요.'); return; }
+
+  peer = new Peer(null, {
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' }
+      ]
+    }
+  });
+
+  peer.on('open', () => {
+    closeModal();
+    document.getElementById('landing').style.display = 'none';
+    document.getElementById('viewerRoom').classList.add('active');
+    document.getElementById('viewRoomCode').textContent = code;
+    setStatus('연결 중...', false);
+
+    // Call the host
+    const call = peer.call('ls-' + code, new MediaStream());
+
+    call.on('stream', (stream) => {
+      document.getElementById('viewerVideo').srcObject = stream;
+      document.getElementById('noStream').style.display = 'none';
+      setStatus('시청 중', true);
+    });
+
+    call.on('close', () => {
+      setStatus('연결 끊김', false);
+      document.getElementById('noStream').style.display = '';
+      document.getElementById('noStream').textContent = '방송이 종료되었습니다.';
+    });
+
+    call.on('error', (err) => {
+      console.error(err);
+      setStatus('연결 실패', false);
+    });
+  });
+
+  peer.on('error', (err) => {
+    console.error(err);
+    if (err.type === 'peer-unavailable') {
+      alert('방을 찾을 수 없습니다. 코드를 확인해주세요.');
+      leaveRoom();
+    }
+  });
+}
+
+function leaveRoom() {
+  if (peer) peer.destroy();
+  setStatus('대기 중', false);
+  document.getElementById('viewerRoom').classList.remove('active');
+  document.getElementById('landing').style.display = '';
+  document.getElementById('noStream').style.display = '';
+  document.getElementById('noStream').textContent = '방송자 연결 대기 중...';
+}
+
+function copyLink() {
+  const url = window.location.origin + window.location.pathname + '?room=' + roomId;
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = document.querySelector('.copy-link');
+    btn.textContent = '복사됨!';
+    setTimeout(() => btn.textContent = '링크 복사', 2000);
+  });
+}
+
+// Auto-join if room param exists
+window.addEventListener('load', () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('room')) {
+    document.getElementById('joinCode').value = params.get('room');
+    joinRoom();
+  }
+});
+</script>
+</body>
+</html>
